@@ -101,23 +101,37 @@ func mustGetV() {
 
 }
 
-func getRealName(client elastic.API, index string) (string, error) {
+func getShardNums(client elastic.API, index string) (int, error) {
+	settings, err := client.GetIndexSettings(index)
+	if err != nil {
+		return 0, err
+	}
 	aliases, err := client.GetAliases()
 	if err != nil {
-		log.Error(err)
-		return "", err
+		return 0, err
 	}
+	indexName := index
 	if info, ok := (*aliases)[index]; ok {
 		if len(info.Index) == 1 {
-			return info.Index[0], nil
+			indexName = info.Index[0]
 		}
 		for _, name := range info.Index {
 			if name != info.WriteIndex {
-				return name, nil
+				indexName = name
+				break
 			}
 		}
 	}
-	return index, nil
+	shardsNumV, err := settings.GetValue(indexName + ".settings.index.number_of_shards")
+	if err != nil {
+		return 0, err
+	}
+	shardsNum, err := strconv.Atoi(shardsNumV.(string))
+	if err != nil {
+		log.Error("failed to get number_of_shards of " + index)
+		return 0, err
+	}
+	return shardsNum, nil
 }
 
 func forceMerge(client elastic.API, index string) {
@@ -129,23 +143,7 @@ GET_STATS:
 		log.Error(err)
 		return
 	}
-	settings, err := client.GetIndexSettings(index)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	indexName, err := getRealName(client, index)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	shardsNumV, err := settings.GetValue(indexName + ".settings.index.number_of_shards")
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	log.Error("shardsnum " + shardsNumV.(string))
-	shardsNum, err := strconv.Atoi(shardsNumV.(string))
+	shardsNum, err := getShardNums(client, index)
 	if err != nil {
 		log.Error("failed to get number_of_shards of " + index)
 		return
