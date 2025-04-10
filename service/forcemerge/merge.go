@@ -48,8 +48,8 @@ import (
 	"infini.sh/framework/core/queue"
 	"infini.sh/framework/core/task"
 	"infini.sh/framework/core/util"
-	"reflect"
 	"runtime"
+	"strconv"
 	"time"
 )
 
@@ -101,18 +101,23 @@ func mustGetV() {
 
 }
 
-func convertToInt(y interface{}) int {
-	ytyp := reflect.TypeOf(y)
-	var yint int = 0
-	switch ytyp.Kind() {
-	case reflect.Float32:
-		yint = int(y.(float32))
-	case reflect.Float64:
-		yint = int(y.(float64))
-	default:
-        	yint = util.InterfaceToInt(y)
-    	}
-    	return yint
+func getRealName(client elastic.API, index string) (string, error) {
+	aliases, err := client.GetAliases()
+	if err != nil {
+		log.Error(err)
+		return "", err
+	}
+	if info, ok := (*aliases)[index]; ok {
+		if len(info.Index) == 1 {
+			return info.Index[0], nil
+		}
+		for _, name := range info.Index {
+			if name != info.WriteIndex {
+				return name, nil
+			}
+		}
+	}
+	return index, nil
 }
 
 func forceMerge(client elastic.API, index string) {
@@ -120,27 +125,51 @@ func forceMerge(client elastic.API, index string) {
 	retry := 0
 GET_STATS:
 	stats, err := client.GetIndexStats(index)
-
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	settings, err := client.GetIndexSettings(index)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	indexName, err := getRealName(client, index)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	shardsNumV, err := settings.GetValue(indexName + ".settings.index.number_of_shards")
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	log.Error("shardsnum " + shardsNumV.(string))
+	shardsNum, err := strconv.Atoi(shardsNumV.(string))
+	if err != nil {
+		log.Error("failed to get number_of_shards of " + index)
+		return
+	}
 	currentMergeV, err := stats.GetValue("_all.primaries.merges.current")
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	currentMerge := convertToInt(currentMergeV)
+	currentMerge := util.InterfaceToInt(currentMergeV)
 
 	segmentsCountV, err := stats.GetValue("_all.primaries.segments.count")
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	segmentsCount := convertToInt(segmentsCountV)
+	segmentsCount := util.InterfaceToInt(segmentsCountV) / shardsNum
 
 	storeSizeV, err := stats.GetValue("_all.primaries.store.size_in_bytes")
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	storeSize := convertToInt(storeSizeV)
+	storeSize := util.InterfaceToInt(storeSizeV)
 
 	log.Debug(stats)
 	if err != nil {
